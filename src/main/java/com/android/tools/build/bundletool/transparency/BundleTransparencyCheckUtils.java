@@ -21,6 +21,7 @@ import com.android.bundle.CodeTransparencyOuterClass.CodeRelatedFile;
 import com.android.bundle.CodeTransparencyOuterClass.CodeTransparency;
 import com.android.tools.build.bundletool.model.AppBundle;
 import com.android.tools.build.bundletool.model.BundleMetadata;
+import com.android.tools.build.bundletool.model.BundleModule;
 import com.android.tools.build.bundletool.model.exceptions.InvalidBundleException;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.MapDifference;
@@ -101,6 +102,8 @@ public final class BundleTransparencyCheckUtils {
       getCodeRelatedFilesFromParsedTransparencyFile(CodeTransparency parsedTransparencyFile) {
     return parsedTransparencyFile.getCodeRelatedFileList().stream()
         .map(BundleTransparencyCheckUtils::addTypeToDexCodeRelatedFiles)
+        .filter(codeRelatedFile -> codeRelatedFile.getApkPath().startsWith(BundleModule.LIB_DIRECTORY.toString()) ||
+                                   codeRelatedFile.getType().equals(CodeRelatedFile.Type.DEX))
         .collect(toImmutableMap(CodeRelatedFile::getPath, codeRelatedFile -> codeRelatedFile));
   }
 
