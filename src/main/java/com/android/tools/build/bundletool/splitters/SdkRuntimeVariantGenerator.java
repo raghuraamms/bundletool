@@ -15,14 +15,15 @@
  */
 package com.android.tools.build.bundletool.splitters;
 
-import static com.android.tools.build.bundletool.model.utils.TargetingProtoUtils.sdkRuntimeVariantTargeting;
+import static com.android.tools.build.bundletool.model.utils.TargetingProtoUtils.sdkVersionFrom;
 import static com.android.tools.build.bundletool.model.utils.Versions.ANDROID_T_API_VERSION;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 
-import com.android.bundle.Targeting.SdkRuntimeTargeting;
+import com.android.bundle.Targeting.SdkVersion;
 import com.android.bundle.Targeting.SdkVersionTargeting;
 import com.android.bundle.Targeting.VariantTargeting;
 import com.android.tools.build.bundletool.model.AppBundle;
+import com.android.tools.build.bundletool.model.utils.TargetingProtoUtils;
 import com.android.tools.build.bundletool.model.utils.Versions;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Streams;
@@ -61,19 +62,24 @@ public final class SdkRuntimeVariantGenerator {
       return ImmutableSet.of();
     }
 
-    return Streams.concat(
-            sdkVersionVariantTargetings.stream()
-                .filter(
-                    variantTargeting ->
-                        variantTargeting.getSdkVersionTargeting().getValue(0).getMin().getValue()
-                            > ANDROID_T_API_VERSION)
-                .map(
-                    variantTargeting ->
-                        variantTargeting.toBuilder()
-                            .setSdkRuntimeTargeting(
-                                SdkRuntimeTargeting.newBuilder().setRequiresSdkRuntime(true))
-                            .build()),
-            Stream.of(sdkRuntimeVariantTargeting(ANDROID_T_API_VERSION)))
+    ImmutableSet<SdkVersion> sdkVersions =
+        Streams.concat(
+                Stream.of(sdkVersionFrom(ANDROID_T_API_VERSION)),
+                sdkVersionVariantTargetings.stream()
+                    .filter(
+                        variantTargeting ->
+                            variantTargeting
+                                    .getSdkVersionTargeting()
+                                    .getValue(0)
+                                    .getMin()
+                                    .getValue()
+                                > ANDROID_T_API_VERSION)
+                    .map(VariantTargeting::getSdkVersionTargeting)
+                    .flatMap(sdkVersionTargeting -> sdkVersionTargeting.getValueList().stream()))
+            .collect(toImmutableSet());
+
+    return sdkVersions.stream()
+        .map(TargetingProtoUtils::sdkRuntimeVariantTargeting)
         .collect(toImmutableSet());
   }
 }

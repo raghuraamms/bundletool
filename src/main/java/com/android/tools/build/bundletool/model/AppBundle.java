@@ -21,6 +21,7 @@ import static com.android.tools.build.bundletool.model.utils.BundleParser.readBu
 import static com.android.tools.build.bundletool.model.utils.BundleParser.readBundleMetadata;
 import static com.android.tools.build.bundletool.model.utils.BundleParser.sanitize;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.ImmutableListMultimap.toImmutableListMultimap;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.MoreCollectors.onlyElement;
@@ -35,10 +36,11 @@ import com.android.bundle.RuntimeEnabledSdkConfigProto.RuntimeEnabledSdk;
 import com.android.bundle.Targeting.Abi;
 import com.android.bundle.Targeting.NativeDirectoryTargeting;
 import com.android.tools.build.bundletool.model.BundleModule.ModuleType;
+import com.android.tools.build.bundletool.model.exceptions.InvalidBundleException;
 import com.android.tools.build.bundletool.model.version.Version;
 import com.google.auto.value.AutoValue;
-import com.google.auto.value.extension.memoized.Memoized;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
@@ -65,6 +67,15 @@ public abstract class AppBundle implements Bundle {
   /** Top-level directory names that are not recognized as modules. */
   public static final ImmutableSet<ZipPath> NON_MODULE_DIRECTORIES =
       ImmutableSet.of(METADATA_DIRECTORY, ZipPath.create("META-INF"));
+
+  /**
+   * File path for opting out from hibernation. To opt out this file should be included within base
+   * module of the {@link AppBundle}. More information can be found in the <a
+   * href="https://android-developers.googleblog.com/2022/03/freeing-up-60-of-storage-for-apps.html">blog
+   * post</a>.
+   */
+  public static final String ARCHIVE_OPT_OUT_XML_PATH =
+      "res/xml/com_android_vending_archive_opt_out.xml";
 
   /** Builds an {@link AppBundle} from an App Bundle on disk. */
   public static AppBundle buildFromZip(ZipFile bundleFile) {
@@ -95,15 +106,29 @@ public abstract class AppBundle implements Bundle {
     ImmutableSet<String> pinnedResourceNames =
         ImmutableSet.copyOf(bundleConfig.getMasterResources().getResourceNamesList());
 
+    ImmutableListMultimap<String, RuntimeEnabledSdk> runtimeEnabledSdkDependencies =
+        modules.stream()
+            .filter(module -> module.getRuntimeEnabledSdkConfig().isPresent())
+            .map(module -> module.getRuntimeEnabledSdkConfig().get())
+            .flatMap(
+                runtimeEnabledSdkConfig ->
+                    runtimeEnabledSdkConfig.getRuntimeEnabledSdkList().stream())
+            .collect(toImmutableListMultimap(RuntimeEnabledSdk::getPackageName, identity()));
+    validateUniqueSdkDependencies(runtimeEnabledSdkDependencies);
+
     return builder()
         .setModules(Maps.uniqueIndex(modules, BundleModule::getName))
         .setMasterPinnedResourceIds(pinnedResourceIds)
         .setMasterPinnedResourceNames(pinnedResourceNames)
         .setBundleConfig(bundleConfig)
         .setBundleMetadata(bundleMetadata)
+        .setRuntimeEnabledSdkDependencies(
+            runtimeEnabledSdkDependencies.values().stream()
+                .collect(toImmutableMap(RuntimeEnabledSdk::getPackageName, identity())))
         .build();
   }
 
+  @Override
   public abstract ImmutableMap<BundleModuleName, BundleModule> getModules();
 
   /**
@@ -121,6 +146,14 @@ public abstract class AppBundle implements Bundle {
 
   @Override
   public abstract BundleMetadata getBundleMetadata();
+
+  /**
+   * Returns runtime-enabled SDK dependencies of this bundle, keyed by SDK package name.
+   *
+   * <p>Note, that this method flattens dependencies across all modules, forgetting the association
+   * of the runtime-enabled SDK dependencies with specific app bundle modules.
+   */
+  public abstract ImmutableMap<String, RuntimeEnabledSdk> getRuntimeEnabledSdkDependencies();
 
   /**
    * Returns all feature modules for this bundle, including the base module.
@@ -225,31 +258,27 @@ public abstract class AppBundle implements Bundle {
 
   /** Returns value of the store archive setting. */
   public Optional<Boolean> getStoreArchive() {
-    return getBundleConfig().getOptimizations().hasStoreArchive()
-        ? Optional.of(getBundleConfig().getOptimizations().getStoreArchive().getEnabled())
-        : Optional.empty();
+    if (getBundleConfig().getOptimizations().hasStoreArchive()) {
+      return Optional.of(getBundleConfig().getOptimizations().getStoreArchive().getEnabled());
+    }
+    if (hasBaseModule()
+        && getBaseModule()
+            .findEntriesUnderPath(BundleModule.RESOURCES_DIRECTORY)
+            .anyMatch(entry -> entry.getPath().equals(ZipPath.create(ARCHIVE_OPT_OUT_XML_PATH)))) {
+      return Optional.of(false);
+    }
+    return Optional.empty();
   }
 
-  /**
-   * Returns runtime-enabled SDK dependencies of this bundle, keyed by SDK package name.
-   *
-   * <p>Note, that this method flattens dependencies across all modules, forgetting the association
-   * of the runtime-enabled SDK dependencies with specific app bundle modules.
-   */
-  @Memoized
-  public ImmutableMap<String, RuntimeEnabledSdk> getRuntimeEnabledSdkDependencies() {
-    return getFeatureModules().values().stream()
-        .filter(module -> module.getRuntimeEnabledSdkConfig().isPresent())
-        .map(module -> module.getRuntimeEnabledSdkConfig().get())
-        .flatMap(
-            runtimeEnabledSdkConfig -> runtimeEnabledSdkConfig.getRuntimeEnabledSdkList().stream())
-        .collect(toImmutableMap(RuntimeEnabledSdk::getPackageName, identity()));
+  /** Returns {@code true} if bundletool has to generate a LocaleConfig file. */
+  public boolean injectLocaleConfig() {
+    return getBundleConfig().getLocales().getInjectLocaleConfig();
   }
 
   public abstract Builder toBuilder();
 
   static Builder builder() {
-    return new AutoValue_AppBundle.Builder();
+    return new AutoValue_AppBundle.Builder().setRuntimeEnabledSdkDependencies(ImmutableMap.of());
   }
 
   /** Builder for App Bundle object */
@@ -263,6 +292,19 @@ public abstract class AppBundle implements Bundle {
       return this;
     }
 
+    /** Convenience method to add extra modules to the builder. */
+    public Builder addRawModules(Collection<BundleModule> bundleModules) {
+      modulesBuilder()
+          .putAll(
+              bundleModules.stream().collect(toImmutableMap(BundleModule::getName, identity())));
+      return this;
+    }
+
+    public Builder addRawModule(BundleModule bundleModule) {
+      modulesBuilder().put(bundleModule.getName(), bundleModule);
+      return this;
+    }
+
     public abstract Builder setMasterPinnedResourceIds(ImmutableSet<ResourceId> pinnedResourceIds);
 
     public abstract Builder setMasterPinnedResourceNames(ImmutableSet<String> pinnedResourceNames);
@@ -271,6 +313,27 @@ public abstract class AppBundle implements Bundle {
 
     public abstract Builder setBundleMetadata(BundleMetadata bundleMetadata);
 
+    public abstract Builder setRuntimeEnabledSdkDependencies(
+        ImmutableMap<String, RuntimeEnabledSdk> runtimeEnabledSdkDependencies);
+
     public abstract AppBundle build();
+
+    abstract ImmutableMap.Builder<BundleModuleName, BundleModule> modulesBuilder();
+  }
+
+  private static void validateUniqueSdkDependencies(
+      ImmutableListMultimap<String, RuntimeEnabledSdk> runtimeEnabledSdkDependencies) {
+    runtimeEnabledSdkDependencies
+        .keySet()
+        .forEach(
+            sdkPackageName -> {
+              if (runtimeEnabledSdkDependencies.get(sdkPackageName).size() > 1) {
+                throw InvalidBundleException.builder()
+                    .withUserMessage(
+                        "Found multiple dependencies on the same runtime-enabled SDK '%s'.",
+                        sdkPackageName)
+                    .build();
+              }
+            });
   }
 }

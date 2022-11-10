@@ -19,6 +19,7 @@ import static com.android.tools.build.bundletool.testing.CodeTransparencyTestUti
 import static com.android.tools.build.bundletool.testing.FakeSystemEnvironmentProvider.ANDROID_HOME;
 import static com.android.tools.build.bundletool.testing.FakeSystemEnvironmentProvider.ANDROID_SERIAL;
 import static com.android.tools.build.bundletool.testing.ManifestProtoUtils.androidManifest;
+import static com.android.tools.build.bundletool.testing.ManifestProtoUtils.withSharedUserId;
 import static com.google.common.truth.Truth.assertThat;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.jose4j.jws.AlgorithmIdentifiers.RSA_USING_SHA384;
@@ -48,8 +49,10 @@ import com.android.tools.build.bundletool.model.ZipPath;
 import com.android.tools.build.bundletool.model.exceptions.CommandExecutionException;
 import com.android.tools.build.bundletool.model.exceptions.InvalidCommandException;
 import com.android.tools.build.bundletool.model.utils.SystemEnvironmentProvider;
+import com.android.tools.build.bundletool.model.version.BundleToolVersion;
 import com.android.tools.build.bundletool.testing.AppBundleBuilder;
 import com.android.tools.build.bundletool.testing.CertificateFactory;
+import com.android.tools.build.bundletool.testing.CodeRelatedFileBuilderHelper;
 import com.android.tools.build.bundletool.testing.FakeSystemEnvironmentProvider;
 import com.android.tools.build.bundletool.testing.TestModule;
 import com.android.tools.build.bundletool.transparency.CodeTransparencyCryptoUtils;
@@ -609,6 +612,9 @@ public final class CheckTransparencyCommandTest {
         createJwsToken(
             CodeTransparency.newBuilder()
                 .setVersion(CodeTransparencyVersion.getCurrentVersion())
+                .addCodeRelatedFile(
+                    CodeRelatedFileBuilderHelper.archivedDexCodeRelatedFile(
+                        BundleToolVersion.getCurrentVersion()))
                 .build(),
             transparencyKeyCertificate,
             transparencyPrivateKey);
@@ -645,7 +651,11 @@ public final class CheckTransparencyCommandTest {
   public void bundleMode_transparencyVerified_codeTransparencyVersionNotSet() throws Exception {
     String serializedJws =
         createJwsToken(
-            CodeTransparency.getDefaultInstance(),
+            CodeTransparency.newBuilder()
+                .addCodeRelatedFile(
+                    CodeRelatedFileBuilderHelper.archivedDexCodeRelatedFile(
+                        BundleToolVersion.getCurrentVersion()))
+                .build(),
             transparencyKeyCertificate,
             transparencyPrivateKey);
     AppBundleBuilder appBundle =
@@ -683,6 +693,9 @@ public final class CheckTransparencyCommandTest {
         createJwsToken(
             CodeTransparency.newBuilder()
                 .setVersion(CodeTransparencyVersion.getCurrentVersion())
+                .addCodeRelatedFile(
+                    CodeRelatedFileBuilderHelper.archivedDexCodeRelatedFile(
+                        BundleToolVersion.getCurrentVersion()))
                 .build(),
             transparencyKeyCertificate,
             transparencyPrivateKey);
@@ -756,6 +769,51 @@ public final class CheckTransparencyCommandTest {
     assertThat(output).contains("No APK present. APK signature was not checked.");
     assertThat(output)
         .contains("Verification failed because code transparency signature is invalid.");
+  }
+
+  @Test
+  public void bundleMode_hasSharedUserId_transparencyVerified() throws Exception {
+    String serializedJws =
+        createJwsToken(
+            CodeTransparency.newBuilder()
+                .setVersion(CodeTransparencyVersion.getCurrentVersion())
+                .addCodeRelatedFile(
+                    CodeRelatedFileBuilderHelper.archivedDexCodeRelatedFile(
+                        BundleToolVersion.getCurrentVersion()))
+                .build(),
+            transparencyKeyCertificate,
+            transparencyPrivateKey);
+    AppBundleBuilder appBundle =
+        new AppBundleBuilder()
+            .addModule(
+                "base",
+                module ->
+                    module.setManifest(
+                        androidManifest("com.test.app", withSharedUserId("sharedUserId"))))
+            .addMetadataFile(
+                BundleMetadata.BUNDLETOOL_NAMESPACE,
+                BundleMetadata.TRANSPARENCY_SIGNED_FILE_NAME,
+                CharSource.wrap(serializedJws).asByteSource(Charset.defaultCharset()));
+    new AppBundleSerializer().writeToDisk(appBundle.build(), bundlePath);
+    ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+
+    CheckTransparencyCommand.builder()
+        .setMode(Mode.BUNDLE)
+        .setBundlePath(bundlePath)
+        .setTransparencyKeyCertificate(transparencyKeyCertificate)
+        .build()
+        .checkTransparency(new PrintStream(outputStream));
+
+    String output = new String(outputStream.toByteArray(), UTF_8);
+    assertThat(output).contains("No APK present. APK signature was not checked.");
+    assertThat(output)
+        .contains(
+            "Code transparency signature verified for the provided code transparency key"
+                + " certificate.");
+    assertThat(output)
+        .contains(
+            "Code transparency verified: code related file contents match the code transparency"
+                + " file.");
   }
 
   @Test

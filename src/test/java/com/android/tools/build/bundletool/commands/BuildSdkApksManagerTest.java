@@ -27,17 +27,25 @@ import static com.android.tools.build.bundletool.testing.ManifestProtoUtils.andr
 import static com.android.tools.build.bundletool.testing.ManifestProtoUtils.withMinSdkVersion;
 import static com.android.tools.build.bundletool.testing.SdkBundleBuilder.DEFAULT_SDK_MODULES_CONFIG;
 import static com.android.tools.build.bundletool.testing.SdkBundleBuilder.PACKAGE_NAME;
+import static com.android.tools.build.bundletool.testing.SdkBundleBuilder.createSdkModulesConfig;
 import static com.android.tools.build.bundletool.testing.TestUtils.addKeyToKeystore;
 import static com.android.tools.build.bundletool.testing.TestUtils.createKeystore;
 import static com.android.tools.build.bundletool.testing.TestUtils.extractAndroidManifest;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth8.assertThat;
+import static com.google.common.truth.extensions.proto.ProtoTruth.assertThat;
+import static java.util.Arrays.stream;
 
 import com.android.apksig.ApkVerifier;
 import com.android.bundle.Commands.ApkDescription;
 import com.android.bundle.Commands.BuildSdkApksResult;
 import com.android.bundle.Commands.SdkVersionInformation;
 import com.android.bundle.Commands.Variant;
+import com.android.bundle.SdkModulesConfigOuterClass.RuntimeEnabledSdkVersion;
+import com.android.bundle.Targeting.SdkRuntimeTargeting;
+import com.android.bundle.Targeting.SdkVersion;
+import com.android.bundle.Targeting.SdkVersionTargeting;
+import com.android.bundle.Targeting.VariantTargeting;
 import com.android.tools.build.bundletool.flags.FlagParser;
 import com.android.tools.build.bundletool.io.SdkBundleSerializer;
 import com.android.tools.build.bundletool.io.TempDirectory;
@@ -47,12 +55,16 @@ import com.android.tools.build.bundletool.model.SdkBundle;
 import com.android.tools.build.bundletool.testing.BundleModuleBuilder;
 import com.android.tools.build.bundletool.testing.CertificateFactory;
 import com.android.tools.build.bundletool.testing.SdkBundleBuilder;
+import com.google.common.collect.ImmutableList;
+import com.google.protobuf.Int32Value;
 import java.io.File;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
+import java.util.stream.Stream;
 import java.util.zip.ZipFile;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -110,6 +122,16 @@ public class BuildSdkApksManagerTest {
     BuildSdkApksResult result = extractTocFromSdkApkSetFile(apkSetFile, tmpDir);
 
     assertThat(result.getVariantCount()).isEqualTo(1);
+    assertThat(result.getVariant(0).getTargeting())
+        .isEqualTo(
+            VariantTargeting.newBuilder()
+                .setSdkRuntimeTargeting(
+                    SdkRuntimeTargeting.newBuilder().setRequiresSdkRuntime(true))
+                .setSdkVersionTargeting(
+                    SdkVersionTargeting.newBuilder()
+                        .addValue(
+                            SdkVersion.newBuilder().setMin(Int32Value.of(SDK_SANDBOX_MIN_VERSION))))
+                .build());
     assertThat(result.getPackageName()).isEqualTo(PACKAGE_NAME);
     assertThat(result.getBundletool().getVersion())
         .isEqualTo(DEFAULT_SDK_MODULES_CONFIG.getBundletool().getVersion());
@@ -122,10 +144,20 @@ public class BuildSdkApksManagerTest {
     int major = 15;
     int minor = 0;
     int patch = 5;
+    String sdkProviderClassName = "com.example.sandboxservice.MyNewAdsSdkEntryPoint";
     SdkBundle sdkBundle =
         new SdkBundleBuilder()
             .setVersionCode(versionCode)
-            .setSdkModulesConfig(/* bundletoolVersion= */ "1.9.1", packageName, major, minor, patch)
+            .setSdkModulesConfig(
+                createSdkModulesConfig()
+                    .setSdkPackageName(packageName)
+                    .setSdkVersion(
+                        RuntimeEnabledSdkVersion.newBuilder()
+                            .setMajor(major)
+                            .setMinor(minor)
+                            .setPatch(patch))
+                    .setSdkProviderClassName(sdkProviderClassName)
+                    .build())
             .build();
     execute(sdkBundle);
     ZipFile apkSetFile = new ZipFile(outputFilePath.toFile());
@@ -184,6 +216,8 @@ public class BuildSdkApksManagerTest {
 
     // <property> mutations.
     assertThat(manifest.getSdkPatchVersionProperty()).hasValue(patch);
+    assertThat(manifest.getSdkProviderClassNameProperty()).hasValue(sdkProviderClassName);
+    assertThat(manifest.getCompatSdkProviderClassNameProperty()).isEmpty();
   }
 
   @Test
@@ -213,6 +247,37 @@ public class BuildSdkApksManagerTest {
   }
 
   @Test
+  public void sdkManifestMutation_compatSdkProviderClassNameSet() throws Exception {
+    String sdkProviderClassName = "com.example.sandboxservice.MyNewAdsSdkEntryPoint";
+    String compatSdkProviderClassName = "com.example.MyNewAdsSdkCompatEntryPoint";
+    SdkBundle sdkBundle =
+        new SdkBundleBuilder()
+            .setVersionCode(1253)
+            .setSdkModulesConfig(
+                createSdkModulesConfig()
+                    .setSdkPackageName("com.ads.foo")
+                    .setSdkVersion(
+                        RuntimeEnabledSdkVersion.newBuilder().setMajor(15).setMinor(0).setPatch(5))
+                    .setSdkProviderClassName(sdkProviderClassName)
+                    .setCompatSdkProviderClassName(compatSdkProviderClassName)
+                    .build())
+            .build();
+
+    execute(sdkBundle);
+
+    ZipFile apkSetFile = new ZipFile(outputFilePath.toFile());
+    BuildSdkApksResult result = extractTocFromSdkApkSetFile(apkSetFile, tmpDir);
+    Variant variant = result.getVariant(0);
+    ApkDescription apkDescription = variant.getApkSet(0).getApkDescription(0);
+    File apkFile = extractFromApkSetFile(apkSetFile, apkDescription.getPath(), tmpDir);
+    AndroidManifest manifest = extractAndroidManifest(apkFile, tmpDir);
+
+    assertThat(manifest.getSdkProviderClassNameProperty()).hasValue(sdkProviderClassName);
+    assertThat(manifest.getCompatSdkProviderClassNameProperty())
+        .hasValue(compatSdkProviderClassName);
+  }
+
+  @Test
   public void apksSigned() throws Exception {
     execute(new SdkBundleBuilder().build());
     ZipFile apkSetFile = new ZipFile(outputFilePath.toFile());
@@ -237,11 +302,13 @@ public class BuildSdkApksManagerTest {
         new SdkBundleBuilder()
             .setVersionCode(versionCode)
             .setSdkModulesConfig(
-                /* bundletoolVersion= */ "1.9.1",
-                /* packageName= */ "com.foo.bar",
-                major,
-                minor,
-                patch)
+                createSdkModulesConfig()
+                    .setSdkVersion(
+                        RuntimeEnabledSdkVersion.newBuilder()
+                            .setMajor(major)
+                            .setMinor(minor)
+                            .setPatch(patch))
+                    .build())
             .build();
 
     execute(sdkBundle);
@@ -256,27 +323,45 @@ public class BuildSdkApksManagerTest {
     assertThat(version.getPatch()).isEqualTo(patch);
   }
 
-  private BuildSdkApksCommand createCommand() {
-    return BuildSdkApksCommand.fromFlags(
-        new FlagParser()
-            .parse(
-                "--sdk-bundle=" + sdkBundlePath,
-                "--output=" + outputFilePath,
-                "--ks=" + keystorePath,
-                "--ks-key-alias=" + KEY_ALIAS,
-                "--ks-pass=pass:" + KEYSTORE_PASSWORD,
-                "--key-pass=pass:" + KEY_PASSWORD));
+  @Test
+  public void overwriteFlagOn_fileOverwritten() throws Exception {
+    Files.createFile(outputFilePath);
+
+    execute(new SdkBundleBuilder().build(), createCommand("--overwrite"));
+
+    assertThat(outputFilePath.toFile().length()).isGreaterThan(0L);
   }
 
   private void execute(SdkBundle sdkBundle) throws Exception {
+    execute(sdkBundle, createCommand());
+  }
+
+  private void execute(SdkBundle sdkBundle, BuildSdkApksCommand command) throws Exception {
     new SdkBundleSerializer().writeToDisk(sdkBundle, sdkBundlePath);
 
     DaggerBuildSdkApksManagerComponent.builder()
-        .setBuildSdkApksCommand(createCommand())
+        .setBuildSdkApksCommand(command)
         .setTempDirectory(new TempDirectory(getClass().getSimpleName()))
         .setSdkBundle(sdkBundle)
         .build()
         .create()
         .execute();
+  }
+
+  private BuildSdkApksCommand createCommand(String... additionalFlags) {
+    String[] flags =
+        Stream.concat(getDefaultFlagList().stream(), stream(additionalFlags))
+            .toArray(String[]::new);
+    return BuildSdkApksCommand.fromFlags(new FlagParser().parse(flags));
+  }
+
+  private ImmutableList<String> getDefaultFlagList() {
+    return ImmutableList.of(
+        "--sdk-bundle=" + sdkBundlePath,
+        "--output=" + outputFilePath,
+        "--ks=" + keystorePath,
+        "--ks-key-alias=" + KEY_ALIAS,
+        "--ks-pass=pass:" + KEYSTORE_PASSWORD,
+        "--key-pass=pass:" + KEY_PASSWORD);
   }
 }

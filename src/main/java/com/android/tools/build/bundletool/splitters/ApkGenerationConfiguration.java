@@ -17,6 +17,7 @@
 package com.android.tools.build.bundletool.splitters;
 
 import com.android.bundle.Config.SuffixStripping;
+import com.android.bundle.Config.UncompressDexFiles.UncompressedDexTargetSdk;
 import com.android.bundle.Targeting.Abi;
 import com.android.tools.build.bundletool.model.OptimizationDimension;
 import com.android.tools.build.bundletool.model.ResourceId;
@@ -39,6 +40,10 @@ public abstract class ApkGenerationConfiguration {
   public abstract boolean getEnableUncompressedNativeLibraries();
 
   public abstract boolean getEnableDexCompressionSplitter();
+
+  public abstract UncompressedDexTargetSdk getDexCompressionSplitterForTargetSdk();
+
+  public abstract boolean getEnableSparseEncodingVariant();
 
   public abstract boolean isInstallableOnExternalStorage();
 
@@ -80,6 +85,8 @@ public abstract class ApkGenerationConfiguration {
         .setForInstantAppVariants(false)
         .setEnableUncompressedNativeLibraries(false)
         .setEnableDexCompressionSplitter(false)
+        .setDexCompressionSplitterForTargetSdk(UncompressedDexTargetSdk.UNSPECIFIED)
+        .setEnableSparseEncodingVariant(false)
         .setInstallableOnExternalStorage(false)
         .setAbisForPlaceholderLibs(ImmutableSet.of())
         .setOptimizationDimensions(ImmutableSet.of())
@@ -108,6 +115,11 @@ public abstract class ApkGenerationConfiguration {
         boolean enableUncompressedNativeLibraries);
 
     public abstract Builder setEnableDexCompressionSplitter(boolean enableDexCompressionSplitter);
+
+    public abstract Builder setDexCompressionSplitterForTargetSdk(
+        UncompressedDexTargetSdk uncompressedDexTargetSdk);
+
+    public abstract Builder setEnableSparseEncodingVariant(boolean enableSparseEncoding);
 
     public abstract Builder setAbisForPlaceholderLibs(ImmutableSet<Abi> abis);
 

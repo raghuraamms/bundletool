@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018 The Android Open Source Project
+ * Copyright (C) 2022 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,29 +23,27 @@ import static com.google.common.truth.Truth.assertThat;
 import com.android.bundle.Config.BundleConfig;
 import com.android.tools.build.bundletool.model.version.Version;
 import com.android.tools.build.bundletool.testing.BundleConfigBuilder;
-import java.io.IOException;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
 @RunWith(JUnit4.class)
-public final class ClassDexNameSanitizerTest {
-
-  private static final byte[] DUMMY_CONTENT = new byte[] {0x42};
+public class ClassesDexSanitizerTest {
+  private static final byte[] TEST_CONTENT = new byte[] {0x42};
   private static final BundleConfig DEFAULT_BUNDLE_CONFIG = BundleConfigBuilder.create().build();
 
   @Test
-  public void singleDexFile_doesNotModifyAnything() throws Exception {
+  public void classesDexNameSanitizer_singleDexFile_doesNotModifyAnything() {
     BundleModule module =
         createBasicModule()
-            .addEntry(createModuleEntryForFile("dex/classes.dex", DUMMY_CONTENT))
+            .addEntry(createModuleEntryForFile("dex/classes.dex", TEST_CONTENT))
             .build();
 
-    assertThat(new ClassesDexNameSanitizer().sanitize(module)).isEqualTo(module);
+    assertThat(new ClassesDexSanitizer().applyMutation(module)).isEqualTo(module);
   }
 
   @Test
-  public void multipleDexFilesNamedProperly_doesNotModifyAnything() throws Exception {
+  public void classesDexNameSanitizer_multipleDexFilesNamedProperly_doesNotModifyAnything() {
     BundleModule module =
         createBasicModule()
             .addEntry(createModuleEntryForFile("dex/classes.dex", new byte[] {0x1}))
@@ -53,11 +51,11 @@ public final class ClassDexNameSanitizerTest {
             .addEntry(createModuleEntryForFile("dex/classes3.dex", new byte[] {0x3}))
             .build();
 
-    assertThat(new ClassesDexNameSanitizer().sanitize(module)).isEqualTo(module);
+    assertThat(new ClassesDexSanitizer().applyMutation(module)).isEqualTo(module);
   }
 
   @Test
-  public void multipleDexNamedWithWrongDexFile_renamesCorrectly() throws Exception {
+  public void classesDexNameSanitizer_multipleDexNamedWithWrongDexFile_renamesCorrectly() {
     BundleModule beforeRename =
         createBasicModule()
             .addEntry(createModuleEntryForFile("dex/classes.dex", new byte[] {0x1}))
@@ -72,10 +70,10 @@ public final class ClassDexNameSanitizerTest {
             .addEntry(createModuleEntryForFile("dex/classes3.dex", new byte[] {0x3}))
             .build();
 
-    assertThat(new ClassesDexNameSanitizer().sanitize(beforeRename)).isEqualTo(afterRename);
+    assertThat(new ClassesDexSanitizer().applyMutation(beforeRename)).isEqualTo(afterRename);
   }
 
-  private static BundleModule.Builder createBasicModule() throws IOException {
+  private static BundleModule.Builder createBasicModule() {
     return BundleModule.builder()
         .setName(BundleModuleName.create("module"))
         .setBundleType(DEFAULT_BUNDLE_CONFIG.getType())

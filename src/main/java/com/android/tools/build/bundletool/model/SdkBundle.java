@@ -18,15 +18,20 @@ package com.android.tools.build.bundletool.model;
 
 import static com.android.tools.build.bundletool.model.utils.BundleParser.extractModules;
 import static com.android.tools.build.bundletool.model.utils.BundleParser.readBundleMetadata;
+import static com.android.tools.build.bundletool.model.utils.BundleParser.readSdkBundleConfig;
+import static com.android.tools.build.bundletool.model.utils.BundleParser.readSdkInterfaceDescriptors;
 import static com.android.tools.build.bundletool.model.utils.BundleParser.readSdkModulesConfig;
 import static com.android.tools.build.bundletool.model.utils.BundleParser.sanitize;
 import static com.google.common.base.Preconditions.checkState;
 
 import com.android.bundle.Config.BundleConfig.BundleType;
+import com.android.bundle.SdkBundleConfigProto.SdkBundleConfig;
 import com.android.bundle.SdkModulesConfigOuterClass.SdkModulesConfig;
 import com.android.tools.build.bundletool.model.version.Version;
 import com.google.auto.value.AutoValue;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.io.ByteSource;
 import com.google.errorprone.annotations.Immutable;
 import java.util.Optional;
 import java.util.zip.ZipFile;
@@ -34,27 +39,34 @@ import java.util.zip.ZipFile;
 /** Represents an SDK bundle. */
 @Immutable
 @AutoValue
+@AutoValue.CopyAnnotations
+@SuppressWarnings("Immutable") // ByteSource is not @Immutable.
 public abstract class SdkBundle implements Bundle {
 
   /** Builds an {@link SdkBundle} from an SDK Bundle on disk. */
   public static SdkBundle buildFromZip(
       ZipFile bundleFile, ZipFile modulesFile, Integer versionCode) {
     SdkModulesConfig sdkModulesConfig = readSdkModulesConfig(modulesFile);
+    SdkBundleConfig sdkBundleConfig = readSdkBundleConfig(bundleFile);
+    Optional<ByteSource> sdkInterfaceDescriptors = readSdkInterfaceDescriptors(bundleFile);
 
-    return builder()
-        .setModule(
-            sanitize(
-                    extractModules(
-                        modulesFile,
-                        BundleType.REGULAR,
-                        Version.of(sdkModulesConfig.getBundletool().getVersion()),
-                        /* apexConfig= */ Optional.empty(),
-                        /* nonModuleDirectories= */ ImmutableSet.of()))
-                .get(0))
-        .setSdkModulesConfig(sdkModulesConfig)
-        .setBundleMetadata(readBundleMetadata(bundleFile))
-        .setVersionCode(versionCode)
-        .build();
+    Builder bundle =
+        builder()
+            .setModule(
+                sanitize(
+                        extractModules(
+                            modulesFile,
+                            BundleType.REGULAR,
+                            Version.of(sdkModulesConfig.getBundletool().getVersion()),
+                            /* apexConfig= */ Optional.empty(),
+                            /* nonModuleDirectories= */ ImmutableSet.of()))
+                    .get(0))
+            .setSdkModulesConfig(sdkModulesConfig)
+            .setSdkBundleConfig(sdkBundleConfig)
+            .setBundleMetadata(readBundleMetadata(bundleFile))
+            .setVersionCode(versionCode);
+    sdkInterfaceDescriptors.ifPresent(bundle::setSdkInterfaceDescriptors);
+    return bundle.build();
   }
 
   public abstract BundleModule getModule();
@@ -65,12 +77,22 @@ public abstract class SdkBundle implements Bundle {
     return getModule();
   }
 
+  @Override
+  public ImmutableMap<BundleModuleName, BundleModule> getModules() {
+    BundleModule module = getModule();
+    return ImmutableMap.of(module.getName(), module);
+  }
+
   public abstract SdkModulesConfig getSdkModulesConfig();
+
+  public abstract SdkBundleConfig getSdkBundleConfig();
 
   @Override
   public abstract BundleMetadata getBundleMetadata();
 
-  public abstract Integer getVersionCode();
+  public abstract Optional<Integer> getVersionCode();
+
+  public abstract Optional<ByteSource> getSdkInterfaceDescriptors();
 
   public Version getBundletoolVersion() {
     return Version.of(getSdkModulesConfig().getBundletool().getVersion());
@@ -100,6 +122,18 @@ public abstract class SdkBundle implements Bundle {
   /** Gets the patch version of the SDK bundle. */
   public int getPatchVersion() {
     return getSdkModulesConfig().getSdkVersion().getPatch();
+  }
+
+  /** Gets the platform SDK provider class name. */
+  public String getProviderClassName() {
+    return getSdkModulesConfig().getSdkProviderClassName();
+  }
+
+  /** Gets the Jetpack SDK provider entrypoint class name. */
+  public Optional<String> getCompatProviderClassName() {
+    return getSdkModulesConfig().getCompatSdkProviderClassName().isEmpty()
+        ? Optional.empty()
+        : Optional.of(getSdkModulesConfig().getCompatSdkProviderClassName());
   }
 
   /**
@@ -142,9 +176,13 @@ public abstract class SdkBundle implements Bundle {
 
     public abstract Builder setSdkModulesConfig(SdkModulesConfig sdkModulesConfig);
 
+    public abstract Builder setSdkBundleConfig(SdkBundleConfig sdkBundleConfig);
+
     public abstract Builder setBundleMetadata(BundleMetadata bundleMetadata);
 
     public abstract Builder setVersionCode(Integer versionCode);
+
+    public abstract Builder setSdkInterfaceDescriptors(ByteSource source);
 
     public abstract SdkBundle build();
   }

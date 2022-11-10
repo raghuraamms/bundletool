@@ -45,6 +45,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import com.android.aapt.Resources.Package;
 import com.android.aapt.Resources.ResourceTable;
 import com.android.aapt.Resources.XmlNode;
+import com.android.bundle.Commands.RuntimeEnabledSdkDependency;
 import com.android.bundle.Config.BundleConfig;
 import com.android.bundle.Files.ApexImages;
 import com.android.bundle.Files.Assets;
@@ -68,7 +69,7 @@ import org.junit.runners.JUnit4;
 public class BundleModuleTest {
 
   private static final BundleConfig DEFAULT_BUNDLE_CONFIG = BundleConfigBuilder.create().build();
-  private static final byte[] DUMMY_CONTENT = new byte[0];
+  private static final byte[] TEST_CONTENT = new byte[0];
 
   @Test
   public void missingAssetsProtoFile_returnsEmptyProto() {
@@ -284,9 +285,9 @@ public class BundleModuleTest {
   /** Tests that we skip directories that contain a directory that we want to find entries under. */
   @Test
   public void entriesUnderPath_withPrefixDirectory() throws Exception {
-    ModuleEntry entry1 = createModuleEntryForFile("dir1/entry1", DUMMY_CONTENT);
-    ModuleEntry entry2 = createModuleEntryForFile("dir1/entry2", DUMMY_CONTENT);
-    ModuleEntry entry3 = createModuleEntryForFile("dir1longer/entry3", DUMMY_CONTENT);
+    ModuleEntry entry1 = createModuleEntryForFile("dir1/entry1", TEST_CONTENT);
+    ModuleEntry entry2 = createModuleEntryForFile("dir1/entry2", TEST_CONTENT);
+    ModuleEntry entry3 = createModuleEntryForFile("dir1longer/entry3", TEST_CONTENT);
 
     BundleModule bundleModule =
         createMinimalModuleBuilder().addEntries(Arrays.asList(entry1, entry2, entry3)).build();
@@ -297,7 +298,7 @@ public class BundleModuleTest {
 
   @Test
   public void getEntry_existing_found() throws Exception {
-    ModuleEntry entry = createModuleEntryForFile("dir/entry", DUMMY_CONTENT);
+    ModuleEntry entry = createModuleEntryForFile("dir/entry", TEST_CONTENT);
 
     BundleModule bundleModule =
         createMinimalModuleBuilder().addEntries(Arrays.asList(entry)).build();
@@ -348,6 +349,87 @@ public class BundleModuleTest {
             mergeModuleTargeting(
                 moduleFeatureTargeting("com.android.hardware.feature"),
                 moduleMinSdkVersionTargeting(/* minSdkVersion= */ 24)));
+  }
+
+  @Test
+  public void getModuleMetadataForSdkRuntimeVariant_moduleHasNoRuntimeEnabledSdkDependencies() {
+    BundleModule bundleModule = createMinimalModuleBuilder().build();
+
+    assertThat(
+            bundleModule
+                .getModuleMetadata(/* isSdkRuntimeVariant= */ true)
+                .getRuntimeEnabledSdkDependenciesCount())
+        .isEqualTo(0);
+  }
+
+  @Test
+  public void getModuleMetadataForSdkRuntimeVariant_moduleHasRuntimeEnabledSdkDependencies() {
+    RuntimeEnabledSdkConfig runtimeEnabledSdkConfig =
+        RuntimeEnabledSdkConfig.newBuilder()
+            .addRuntimeEnabledSdk(
+                RuntimeEnabledSdk.newBuilder()
+                    .setPackageName("sdk.package.name1")
+                    .setVersionMajor(1)
+                    .setVersionMinor(1))
+            .addRuntimeEnabledSdk(
+                RuntimeEnabledSdk.newBuilder()
+                    .setPackageName("sdk.package.name2")
+                    .setVersionMajor(2)
+                    .setVersionMinor(2))
+            .build();
+
+    BundleModule bundleModule =
+        createMinimalModuleBuilder()
+            .addEntry(
+                createModuleEntryForFile(
+                    "runtime_enabled_sdk_config.pb", runtimeEnabledSdkConfig.toByteArray()))
+            .build();
+
+    assertThat(
+            bundleModule
+                .getModuleMetadata(/* isSdkRuntimeVariant= */ true)
+                .getRuntimeEnabledSdkDependenciesList())
+        .containsExactly(
+            RuntimeEnabledSdkDependency.newBuilder()
+                .setPackageName("sdk.package.name1")
+                .setMajorVersion(1)
+                .setMinorVersion(1)
+                .build(),
+            RuntimeEnabledSdkDependency.newBuilder()
+                .setPackageName("sdk.package.name2")
+                .setMajorVersion(2)
+                .setMinorVersion(2)
+                .build());
+  }
+
+  @Test
+  public void getModuleMetadataForNonSdkRuntimeVariant_moduleHasRuntimeEnabledSdkDependencies() {
+    RuntimeEnabledSdkConfig runtimeEnabledSdkConfig =
+        RuntimeEnabledSdkConfig.newBuilder()
+            .addRuntimeEnabledSdk(
+                RuntimeEnabledSdk.newBuilder()
+                    .setPackageName("sdk.package.name1")
+                    .setVersionMajor(1)
+                    .setVersionMinor(1))
+            .addRuntimeEnabledSdk(
+                RuntimeEnabledSdk.newBuilder()
+                    .setPackageName("sdk.package.name2")
+                    .setVersionMajor(2)
+                    .setVersionMinor(2))
+            .build();
+
+    BundleModule bundleModule =
+        createMinimalModuleBuilder()
+            .addEntry(
+                createModuleEntryForFile(
+                    "runtime_enabled_sdk_config.pb", runtimeEnabledSdkConfig.toByteArray()))
+            .build();
+
+    assertThat(
+            bundleModule
+                .getModuleMetadata(/* isSdkRuntimeVariant= */ false)
+                .getRuntimeEnabledSdkDependenciesList())
+        .isEmpty();
   }
 
   @Test
@@ -450,8 +532,8 @@ public class BundleModuleTest {
     BundleModule bundleModule =
         createMinimalModuleBuilder()
             .setAndroidManifestProto(androidManifest("com.test.app"))
-            .addEntry(createModuleEntryForFile("dex/classes.dex", DUMMY_CONTENT))
-            .addEntry(createModuleEntryForFile("res/raw/yuv2rgb.bc", DUMMY_CONTENT))
+            .addEntry(createModuleEntryForFile("dex/classes.dex", TEST_CONTENT))
+            .addEntry(createModuleEntryForFile("res/raw/yuv2rgb.bc", TEST_CONTENT))
             .build();
 
     assertThat(bundleModule.hasRenderscript32Bitcode()).isTrue();
@@ -462,7 +544,7 @@ public class BundleModuleTest {
     BundleModule bundleModule =
         createMinimalModuleBuilder()
             .setAndroidManifestProto(androidManifest("com.test.app"))
-            .addEntry(createModuleEntryForFile("dex/classes.dex", DUMMY_CONTENT))
+            .addEntry(createModuleEntryForFile("dex/classes.dex", TEST_CONTENT))
             .build();
 
     assertThat(bundleModule.hasRenderscript32Bitcode()).isFalse();

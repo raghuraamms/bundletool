@@ -20,6 +20,7 @@ import static com.android.tools.build.bundletool.model.utils.TargetingProtoUtils
 import static com.android.tools.build.bundletool.model.utils.TargetingProtoUtils.sdkVersionTargeting;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static java.util.function.Function.identity;
 
 import com.android.aapt.Resources.ResourceTable;
@@ -27,12 +28,14 @@ import com.android.aapt.Resources.XmlNode;
 import com.android.bundle.Commands.DeliveryType;
 import com.android.bundle.Commands.FeatureModuleType;
 import com.android.bundle.Commands.ModuleMetadata;
+import com.android.bundle.Commands.RuntimeEnabledSdkDependency;
 import com.android.bundle.Config.ApexConfig;
 import com.android.bundle.Config.BundleConfig.BundleType;
 import com.android.bundle.Files.ApexImages;
 import com.android.bundle.Files.Assets;
 import com.android.bundle.Files.NativeLibraries;
 import com.android.bundle.RuntimeEnabledSdkConfigProto.RuntimeEnabledSdkConfig;
+import com.android.bundle.SdkModulesConfigOuterClass.SdkModulesConfig;
 import com.android.bundle.Targeting.ModuleTargeting;
 import com.android.tools.build.bundletool.model.exceptions.InvalidBundleException;
 import com.android.tools.build.bundletool.model.version.Version;
@@ -42,6 +45,8 @@ import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.google.errorprone.annotations.Immutable;
 import java.io.IOException;
 import java.io.InputStream;
@@ -71,6 +76,7 @@ public abstract class BundleModule {
   public static final ZipPath MANIFEST_DIRECTORY = ZipPath.create("manifest");
   public static final ZipPath RESOURCES_DIRECTORY = ZipPath.create("res");
   public static final ZipPath ROOT_DIRECTORY = ZipPath.create("root");
+  public static final ZipPath DRAWABLE_RESOURCE_DIRECTORY = ZipPath.create("res/drawable");
 
   /** The top-level directory of an App Bundle module that contains APEX image files. */
   public static final ZipPath APEX_DIRECTORY = ZipPath.create("apex");
@@ -96,9 +102,11 @@ public abstract class BundleModule {
 
   /** Describes the content type of the module. */
   public enum ModuleType {
+    UNKNOWN_MODULE_TYPE(false),
     FEATURE_MODULE(true),
     ASSET_MODULE(false),
-    ML_MODULE(true);
+    ML_MODULE(true),
+    SDK_DEPENDENCY_MODULE(true);
 
     private final boolean isFeatureModule;
 
@@ -106,7 +114,10 @@ public abstract class BundleModule {
       this.isFeatureModule = isFeatureModule;
     }
 
-    /** Returns whether the module is a feature, including ML modules. */
+    /**
+     * Returns whether the module is a feature, including ML modules and AAB modules generated from
+     * runtime-enabled SDK dependencies.
+     */
     public boolean isFeatureModule() {
       return isFeatureModule;
     }
@@ -118,7 +129,7 @@ public abstract class BundleModule {
   /** Version of Bundeltool used to build the bundle that this module belongs to. */
   public abstract Version getBundletoolVersion();
 
-  abstract XmlNode getAndroidManifestProto();
+  public abstract XmlNode getAndroidManifestProto();
 
   @Memoized
   public AndroidManifest getAndroidManifest() {
@@ -138,6 +149,9 @@ public abstract class BundleModule {
 
   public abstract Optional<RuntimeEnabledSdkConfig> getRuntimeEnabledSdkConfig();
 
+  /** Only present for modules of type SDK_DEPENDENCY_MODULE. */
+  public abstract Optional<SdkModulesConfig> getSdkModulesConfig();
+
   /**
    * Returns entries of the module, indexed by their module path.
    *
@@ -145,6 +159,8 @@ public abstract class BundleModule {
    * entries.
    */
   abstract ImmutableMap<ZipPath, ModuleEntry> getEntryMap();
+
+  public abstract ModuleType getModuleType();
 
   /**
    * Returns entries of the module.
@@ -169,12 +185,6 @@ public abstract class BundleModule {
       return Optional.empty();
     }
     return Optional.of(getAndroidManifest().getInstantModuleDeliveryType());
-  }
-
-  public ModuleType getModuleType() {
-    // If the module type is not defined in the manifest, default to feature module for backwards
-    // compatibility.
-    return getAndroidManifest().getModuleType();
   }
 
   public boolean isIncludedInFusing() {
@@ -255,6 +265,10 @@ public abstract class BundleModule {
   }
 
   public ModuleMetadata getModuleMetadata() {
+    return getModuleMetadata(/* isSdkRuntimeVariant= */ false);
+  }
+
+  public ModuleMetadata getModuleMetadata(boolean isSdkRuntimeVariant) {
     ModuleMetadata.Builder moduleMetadata =
         ModuleMetadata.newBuilder()
             .setName(getName().getName())
@@ -265,8 +279,28 @@ public abstract class BundleModule {
 
     moduleTypeToFeatureModuleType(getModuleType())
         .ifPresent(moduleType -> moduleMetadata.setModuleType(moduleType));
+    if (isSdkRuntimeVariant) {
+      getRuntimeEnabledSdkConfig()
+          .ifPresent(
+              runtimeEnabledSdkConfig ->
+                  moduleMetadata.addAllRuntimeEnabledSdkDependencies(
+                      runtimeEnabledDependenciesFromConfig(runtimeEnabledSdkConfig)));
+    }
 
     return moduleMetadata.build();
+  }
+
+  private static ImmutableSet<RuntimeEnabledSdkDependency> runtimeEnabledDependenciesFromConfig(
+      RuntimeEnabledSdkConfig runtimeEnabledSdkConfig) {
+    return runtimeEnabledSdkConfig.getRuntimeEnabledSdkList().stream()
+        .map(
+            runtimeEnabledSdk ->
+                RuntimeEnabledSdkDependency.newBuilder()
+                    .setPackageName(runtimeEnabledSdk.getPackageName())
+                    .setMajorVersion(runtimeEnabledSdk.getVersionMajor())
+                    .setMinorVersion(runtimeEnabledSdk.getVersionMinor())
+                    .build())
+        .collect(toImmutableSet());
   }
 
   private static DeliveryType moduleDeliveryTypeToDeliveryType(
@@ -284,17 +318,19 @@ public abstract class BundleModule {
   private static Optional<FeatureModuleType> moduleTypeToFeatureModuleType(ModuleType moduleType) {
     switch (moduleType) {
       case FEATURE_MODULE:
+      case SDK_DEPENDENCY_MODULE:
         return Optional.of(FeatureModuleType.FEATURE_MODULE);
       case ML_MODULE:
         return Optional.of(FeatureModuleType.ML_MODULE);
       case ASSET_MODULE:
+      case UNKNOWN_MODULE_TYPE:
         return Optional.empty();
     }
     throw new IllegalArgumentException("Unknown module type: " + moduleType);
   }
 
   public static Builder builder() {
-    return new AutoValue_BundleModule.Builder();
+    return new AutoValue_BundleModule.Builder().setModuleType(ModuleType.UNKNOWN_MODULE_TYPE);
   }
 
   public abstract Builder toBuilder();
@@ -327,6 +363,10 @@ public abstract class BundleModule {
     public abstract Builder setRuntimeEnabledSdkConfig(
         RuntimeEnabledSdkConfig runtimeEnabledSdkConfig);
 
+    public abstract Builder setSdkModulesConfig(SdkModulesConfig sdkModulesConfig);
+
+    public abstract Builder setModuleType(ModuleType moduleType);
+
     abstract ImmutableMap.Builder<ZipPath, ModuleEntry> entryMapBuilder();
 
     abstract Builder setEntryMap(ImmutableMap<ZipPath, ModuleEntry> entryMap);
@@ -338,6 +378,7 @@ public abstract class BundleModule {
      * Thus, prefer using the {@link #addEntry(ModuleEntry)} method when possible, since it also
      * accepts the special files.
      */
+    @CanIgnoreReturnValue
     public Builder setRawEntries(Collection<ModuleEntry> entries) {
       entries.forEach(
           entry ->
@@ -349,7 +390,10 @@ public abstract class BundleModule {
       return this;
     }
 
-    /** @see #addEntry(ModuleEntry) */
+    /**
+     * @see #addEntry(ModuleEntry)
+     */
+    @CanIgnoreReturnValue
     public Builder addEntries(Collection<ModuleEntry> entries) {
       for (ModuleEntry entry : entries) {
         addEntry(entry);
@@ -363,6 +407,7 @@ public abstract class BundleModule {
      * <p>Certain files (eg. AndroidManifest.xml and several module meta-data files) are immediately
      * parsed and stored in dedicated class fields instead of as entries.
      */
+    @CanIgnoreReturnValue
     public Builder addEntry(ModuleEntry moduleEntry) {
       Optional<SpecialModuleEntry> specialEntry =
           SpecialModuleEntry.getSpecialEntry(moduleEntry.getPath());
@@ -387,7 +432,19 @@ public abstract class BundleModule {
 
     public abstract BundleModuleName getName();
 
-    public abstract BundleModule build();
+    abstract BundleModule autoBuild();
+
+    public final BundleModule build() {
+      BundleModule bundleModule = autoBuild();
+      // If module type is not explicitly set, we are reading it from the manifest.
+      if (bundleModule.getModuleType().equals(ModuleType.UNKNOWN_MODULE_TYPE)) {
+        bundleModule =
+            bundleModule.toBuilder()
+                .setModuleType(bundleModule.getAndroidManifest().getModuleType())
+                .build();
+      }
+      return bundleModule;
+    }
   }
 
   /**

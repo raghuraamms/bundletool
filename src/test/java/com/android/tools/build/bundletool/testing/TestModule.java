@@ -23,6 +23,7 @@ import com.android.bundle.Config.Bundletool;
 import com.android.bundle.Devices.DeviceSpec;
 import com.android.tools.build.bundletool.commands.BuildApksCommand;
 import com.android.tools.build.bundletool.commands.BuildApksCommand.ApkBuildMode;
+import com.android.tools.build.bundletool.commands.BuildSdkApksCommand;
 import com.android.tools.build.bundletool.commands.CommandScoped;
 import com.android.tools.build.bundletool.io.AppBundleSerializer;
 import com.android.tools.build.bundletool.io.SdkBundleSerializer;
@@ -55,10 +56,13 @@ import javax.annotation.Nullable;
 public class TestModule {
 
   private final BuildApksCommand buildApksCommand;
+  private final BuildSdkApksCommand buildSdkApksCommand;
   private final Bundle bundle;
 
-  private TestModule(BuildApksCommand buildApksCommand, Bundle bundle) {
+  private TestModule(
+      BuildApksCommand buildApksCommand, BuildSdkApksCommand buildSdkApksCommand, Bundle bundle) {
     this.buildApksCommand = buildApksCommand;
+    this.buildSdkApksCommand = buildSdkApksCommand;
     this.bundle = bundle;
   }
 
@@ -73,21 +77,6 @@ public class TestModule {
   }
 
   @Provides
-  Bundle provideBundle() {
-    return bundle;
-  }
-
-  @Provides
-  BundleConfig provideBundleConfig() {
-    if (bundle instanceof AppBundle) {
-      return ((AppBundle) bundle).getBundleConfig();
-    }
-    return BundleConfig.newBuilder()
-        .setBundletool(((SdkBundle) bundle).getSdkModulesConfig().getBundletool())
-        .build();
-  }
-
-  @Provides
   BundleMetadata provideBundleMetadata() {
     return bundle.getBundleMetadata();
   }
@@ -95,6 +84,11 @@ public class TestModule {
   @Provides
   BuildApksCommand provideBuildApksCommand() {
     return buildApksCommand;
+  }
+
+  @Provides
+  BuildSdkApksCommand provideBuildSdkApksCommand() {
+    return buildSdkApksCommand;
   }
 
   @Provides
@@ -133,6 +127,7 @@ public class TestModule {
     @Nullable private ApkBuildMode apkBuildMode;
     @Nullable private String[] moduleNames;
     @Nullable private DeviceSpec deviceSpec;
+    @Nullable private Boolean fuseOnlyDeviceMatchingModules;
     @Nullable private Consumer<BuildApksCommand.Builder> buildApksCommandSetter;
     @Nullable private OptimizationDimension[] optimizationDimensions;
     @Nullable private PrintStream printStream;
@@ -217,6 +212,11 @@ public class TestModule {
 
     public Builder withApkBuildMode(ApkBuildMode apkBuildMode) {
       this.apkBuildMode = apkBuildMode;
+      return this;
+    }
+
+    public Builder withFuseOnlyDeviceMatchingModules(boolean enabled) {
+      this.fuseOnlyDeviceMatchingModules = enabled;
       return this;
     }
 
@@ -319,23 +319,34 @@ public class TestModule {
                 .setAapt2Command(Aapt2Helper.getAapt2Command())
                 .setBundlePath(bundlePath)
                 .setOutputFile(outputPath);
+
+        BuildSdkApksCommand.Builder sdkCommand =
+            BuildSdkApksCommand.builder()
+                .setAapt2Command(Aapt2Helper.getAapt2Command())
+                .setSdkBundlePath(bundlePath)
+                .setOutputFile(outputPath);
         if (signingConfig != null) {
           command.setSigningConfiguration(signingConfig);
+          sdkCommand.setSigningConfiguration(signingConfig);
         }
         if (signingConfigProvider != null) {
           command.setSigningConfigurationProvider(signingConfigProvider);
         }
         if (apkModifier != null) {
           command.setApkModifier(apkModifier);
+          sdkCommand.setApkModifier(apkModifier);
         }
         if (apkListener != null) {
           command.setApkListener(apkListener);
+          sdkCommand.setApkListener(apkListener);
         }
         if (firstVariantNumber != null) {
           command.setFirstVariantNumber(firstVariantNumber);
+          sdkCommand.setFirstVariantNumber(firstVariantNumber);
         }
         if (executorService != null) {
           command.setExecutorService(executorService);
+          sdkCommand.setExecutorService(executorService);
         }
         if (apkBuildMode != null) {
           command.setApkBuildMode(apkBuildMode);
@@ -345,6 +356,9 @@ public class TestModule {
         }
         if (deviceSpec != null) {
           command.setDeviceSpec(deviceSpec);
+        }
+        if (fuseOnlyDeviceMatchingModules != null) {
+          command.setFuseOnlyDeviceMatchingModules(fuseOnlyDeviceMatchingModules);
         }
         if (optimizationDimensions != null) {
           command.setOptimizationDimensions(ImmutableSet.copyOf(optimizationDimensions));
@@ -362,7 +376,7 @@ public class TestModule {
           buildApksCommandSetter.accept(command);
         }
 
-        return new TestModule(command.build(), bundle);
+        return new TestModule(command.build(), sdkCommand.build(), bundle);
       } catch (IOException e) {
         throw new UncheckedIOException(e);
       }

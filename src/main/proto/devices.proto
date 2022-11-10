@@ -35,4 +35,14 @@ message DeviceSpec {
 
   // Device groups the device belongs to.
   repeated string device_groups = 9;
+
+  // Information about the runtime-enabled SDK capabilities of the device.
+  SdkRuntime sdk_runtime = 10;
+}
+
+message SdkRuntime {
+  // Whether runtime-enabled SDKs can run on the device
+  bool supported = 1;
+
+  reserved 2;
 }
