@@ -46,6 +46,9 @@ public abstract class BundleMetadata {
 
   public static final String TRANSPARENCY_SIGNED_FILE_NAME = "code_transparency_signed.jwt";
 
+  /* Signed file name of custom manifest file added to app */
+  public static final String TRANSPARENCY_EXTRA_FILE_NAME = "codetransparency_custom.jwt";
+
   /**
    * Returns the raw metadata map.
    *

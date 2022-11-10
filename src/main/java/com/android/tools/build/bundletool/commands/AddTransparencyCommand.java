@@ -19,6 +19,7 @@ import static com.android.tools.build.bundletool.transparency.CodeTransparencyCr
 import static java.util.Arrays.stream;
 import static java.util.stream.Collectors.joining;
 import static org.jose4j.jws.AlgorithmIdentifiers.RSA_USING_SHA256;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 
 import com.android.bundle.CodeTransparencyOuterClass.CodeTransparency;
 import com.android.tools.build.bundletool.commands.CommandHelp.CommandDescription;
@@ -26,14 +27,12 @@ import com.android.tools.build.bundletool.commands.CommandHelp.FlagDescription;
 import com.android.tools.build.bundletool.flags.Flag;
 import com.android.tools.build.bundletool.flags.ParsedFlags;
 import com.android.tools.build.bundletool.io.AppBundleSerializer;
-import com.android.tools.build.bundletool.model.AppBundle;
-import com.android.tools.build.bundletool.model.BundleMetadata;
-import com.android.tools.build.bundletool.model.Password;
-import com.android.tools.build.bundletool.model.SignerConfig;
+import com.android.tools.build.bundletool.model.*;
 import com.android.tools.build.bundletool.model.exceptions.CommandExecutionException;
 import com.android.tools.build.bundletool.model.exceptions.InvalidBundleException;
 import com.android.tools.build.bundletool.model.exceptions.InvalidCommandException;
 import com.android.tools.build.bundletool.model.utils.files.FilePreconditions;
+import com.android.tools.build.bundletool.model.ModuleEntry.ModuleEntryBundleLocation;
 import com.android.tools.build.bundletool.transparency.BundleTransparencyCheckUtils;
 import com.android.tools.build.bundletool.transparency.CodeTransparencyFactory;
 import com.google.auto.value.AutoValue;
@@ -51,6 +50,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.cert.X509Certificate;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
@@ -300,7 +300,7 @@ public abstract class AddTransparencyCommand {
                         + " [yes/no]:");
         return Ascii.equalsIgnoreCase(userDecision, "yes")
             ? DexMergingChoice.CONTINUE
-            : DexMergingChoice.REJECT;
+            : DexMergingChoice.REJECT; 
     }
     throw new IllegalStateException("Unsupported DexMergingChoice");
   }
@@ -309,6 +309,13 @@ public abstract class AddTransparencyCommand {
     validateDefaultModeInputs();
     String jsonText =
         toJsonText(CodeTransparencyFactory.createCodeTransparencyMetadata(inputBundle));
+	/*custom manifest creation*/
+	String customJsonText =
+        toJsonText(CodeTransparencyFactory.createCodeTransparencyMetadata(inputBundle, ".so.7z"));
+	
+	try {
+		final String customTransprencyFile = createSignedJwt(customJsonText, getSignerConfig().get().getCertificates());
+	
     AppBundle.Builder bundleBuilder = inputBundle.toBuilder();
     bundleBuilder.setBundleMetadata(
         inputBundle.getBundleMetadata().toBuilder()
@@ -316,8 +323,14 @@ public abstract class AddTransparencyCommand {
                 BundleMetadata.BUNDLETOOL_NAMESPACE,
                 BundleMetadata.TRANSPARENCY_SIGNED_FILE_NAME,
                 toBytes(createSignedJwt(jsonText, getSignerConfig().get().getCertificates())))
-            .build());
+            .build())
+	    .setRawModules(
+				inputBundle.getModules().values().stream()
+			        .map(module -> module.isBaseModule() ? addCustomTransparencyFile(module, customTransprencyFile) : module)
+                    .collect(toImmutableList()));
     new AppBundleSerializer().writeToDisk(bundleBuilder.build(), getOutputPath());
+	} catch(JoseException je) {
+	}
   }
 
   private void executeGenerateCodeTransparencyFileMode(AppBundle inputBundle) throws IOException {
@@ -330,6 +343,15 @@ public abstract class AddTransparencyCommand {
                 createJwtWithoutSignature(
                     codeTransparencyMetadata, getTransparencyKeyCertificates()))
             .read());
+	/*custom manifest creation*/
+	String customCodeTransparencyMetadata =
+        toJsonText(CodeTransparencyFactory.createCodeTransparencyMetadata(inputBundle, ".so.7z"));
+	Files.write(
+        Paths.get(getOutputPath().getParent().toString(),BundleMetadata.TRANSPARENCY_EXTRA_FILE_NAME),
+        toBytes(
+                createJwtWithoutSignature(
+                    customCodeTransparencyMetadata, getTransparencyKeyCertificates()))
+            .read());
   }
 
   private void executeInjectSignatureMode(AppBundle inputBundle) throws IOException {
@@ -340,6 +362,11 @@ public abstract class AddTransparencyCommand {
         toJsonText(CodeTransparencyFactory.createCodeTransparencyMetadata(inputBundle));
     String transparencyFileWithoutSignature =
         createJwtWithoutSignature(codeTransparencyMetadata, getTransparencyKeyCertificates());
+	/*custom manifest creation*/
+	String customCodeTransparencyMetadata =
+        toJsonText(CodeTransparencyFactory.createCodeTransparencyMetadata(inputBundle, ".so.7z"));
+	String customTransparencyFileWithoutSignature =
+        createJwtWithoutSignature(customCodeTransparencyMetadata, getTransparencyKeyCertificates());
     AppBundle bundleWithTransparency =
         inputBundle.toBuilder()
             .setBundleMetadata(
@@ -348,7 +375,11 @@ public abstract class AddTransparencyCommand {
                         BundleMetadata.BUNDLETOOL_NAMESPACE,
                         BundleMetadata.TRANSPARENCY_SIGNED_FILE_NAME,
                         toBytes(transparencyFileWithoutSignature + "." + signature))
-                    .build())
+					.build())
+            .setRawModules(
+				inputBundle.getModules().values().stream()
+			        .map(module -> module.isBaseModule() ? addCustomTransparencyFile(module, customTransparencyFileWithoutSignature + "." + signature) : module)
+                    .collect(toImmutableList()))
             .build();
     if (!BundleTransparencyCheckUtils.checkTransparency(bundleWithTransparency).verified()) {
       throw CommandExecutionException.builder()
@@ -358,6 +389,33 @@ public abstract class AddTransparencyCommand {
           .build();
     }
     new AppBundleSerializer().writeToDisk(bundleWithTransparency, getOutputPath());
+  }
+  
+  private BundleModule addCustomTransparencyFile(BundleModule module, String content) {
+	  //ModuleEntry entry = module.getEntry(BundleModule.ASSETS_DIRECTORY.resolve(BundleMetadata.TRANSPARENCY_EXTRA_SIGNED_FILE_NAME)).get();
+	  //entry.setContent(toBytes(content));
+	  //return module;
+	  return module.toBuilder()
+	        .setRawEntries(module.getEntries().stream()
+			.map(entry -> entry.getPath().equals(BundleModule.ASSETS_DIRECTORY.resolve(BundleMetadata.TRANSPARENCY_EXTRA_FILE_NAME))? ModuleEntry.builder()
+			    .setContent(toBytes(content))
+			    .setBundleLocation(entry.getBundleLocation())
+                .setPath(entry.getPath())
+                .setForceUncompressed(false)
+            .build() : entry).collect(toImmutableList()))
+			.build();
+	/*return module.toBuilder()
+        .addEntry(
+		    ModuleEntry.builder()
+			    .setContent(toBytes(content))
+			    .setBundleLocation(
+                        ModuleEntryBundleLocation.create(
+                            Paths.get(""),
+                            BundleModule.ASSETS_DIRECTORY.resolve(BundleMetadata.TRANSPARENCY_EXTRA_SIGNED_FILE_NAME)))
+                .setPath(BundleModule.ASSETS_DIRECTORY.resolve(BundleMetadata.TRANSPARENCY_EXTRA_SIGNED_FILE_NAME))
+                .setForceUncompressed(false)
+            .build())
+        .build();*/
   }
 
   public static CommandHelp help() {

@@ -68,7 +68,7 @@ abstract class XmlProtoElementOrBuilder<
   }
 
   public final Stream<NodeWrapperT> getChildrenText() {
-    return getChildren().filter(NodeWrapperT::isText);
+    return getChildren().filter(nodewrapper -> nodewrapper.isText());
   }
 
   public final Optional<NodeWrapperT> getChildText() {
@@ -99,7 +99,7 @@ abstract class XmlProtoElementOrBuilder<
   }
 
   public final Stream<ElementWrapperT> getChildrenElements() {
-    return getChildren().filter(NodeWrapperT::isElement).map(NodeWrapperT::getElement);
+    return getChildren().filter(n -> n.isElement()).map(n -> n.getElement());
   }
 
   /** Finds XML elements among the direct children with the given name and empty namespace URI. */

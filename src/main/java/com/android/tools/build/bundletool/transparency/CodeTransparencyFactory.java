@@ -35,12 +35,17 @@ import java.util.stream.Stream;
 /** Shared static utilities for adding and verifying {@link CodeTransparency}. */
 public final class CodeTransparencyFactory {
 
+
+   public static CodeTransparency createCodeTransparencyMetadata(AppBundle bundle) {
+	   return createCodeTransparencyMetadata(bundle, null);
+   }
+
   /** Returns {@link CodeTransparency} for the given {@link AppBundle}. */
-  public static CodeTransparency createCodeTransparencyMetadata(AppBundle bundle) {
+  public static CodeTransparency createCodeTransparencyMetadata(AppBundle bundle, String extensionsOverride) {
     ImmutableList<CodeRelatedFile> codeRelatedFiles =
         bundle.getFeatureModules().values().stream()
-            .flatMap(bundleModule -> getCodeRelatedFileEntries(bundleModule))
-            .map(CodeTransparencyFactory::createCodeRelatedFile)
+            .flatMap(bundleModule -> getCodeRelatedFileEntries(bundleModule, extensionsOverride))
+            .map(moduleEntry -> createCodeRelatedFile(moduleEntry, extensionsOverride))
             .sorted(Comparator.comparing(CodeRelatedFile::getPath))
             .collect(toImmutableList());
     return CodeTransparency.newBuilder()
@@ -63,16 +68,19 @@ public final class CodeTransparencyFactory {
     return codeTransparencyProto.build();
   }
 
-  private static Stream<ModuleEntry> getCodeRelatedFileEntries(BundleModule module) {
-    return module.getEntries().stream().filter(CodeTransparencyFactory::isCodeRelatedFile);
+  private static Stream<ModuleEntry> getCodeRelatedFileEntries(BundleModule module, String extensionsOverride) {
+    return module.getEntries().stream().filter(moduleEntry -> isCodeRelatedFile(moduleEntry, extensionsOverride));
   }
 
-  private static CodeRelatedFile createCodeRelatedFile(ModuleEntry moduleEntry) {
+  private static CodeRelatedFile createCodeRelatedFile(ModuleEntry moduleEntry, String extensionsOverride) {
     checkArgument(moduleEntry.getBundleLocation().isPresent());
     CodeRelatedFile.Builder codeRelatedFile =
         CodeRelatedFile.newBuilder()
             .setPath(moduleEntry.getBundleLocation().get().entryPathInBundle().toString());
-    if (moduleEntry.getPath().startsWith(BundleModule.LIB_DIRECTORY)) {
+	if (extensionsOverride != null) {
+		codeRelatedFile.setType(CodeRelatedFile.Type.NATIVE_LIBRARY);
+	}
+    else if (moduleEntry.getPath().startsWith(BundleModule.LIB_DIRECTORY)) {
       codeRelatedFile.setType(CodeRelatedFile.Type.NATIVE_LIBRARY);
       codeRelatedFile.setApkPath(moduleEntry.getPath().toString());
     } else {
@@ -86,10 +94,15 @@ public final class CodeTransparencyFactory {
     return codeRelatedFile.build();
   }
 
-  private static boolean isCodeRelatedFile(ModuleEntry moduleEntry) {
-    return moduleEntry.getPath().startsWith(BundleModule.DEX_DIRECTORY)
-        || (moduleEntry.getPath().startsWith(BundleModule.LIB_DIRECTORY)
-            && moduleEntry.getPath().toString().endsWith(".so"));
+  private static boolean isCodeRelatedFile(ModuleEntry moduleEntry, String extensionsOverride) {
+	if(extensionsOverride == null) {
+        return moduleEntry.getPath().startsWith(BundleModule.DEX_DIRECTORY)
+            || (moduleEntry.getPath().startsWith(BundleModule.LIB_DIRECTORY)
+                && moduleEntry.getPath().toString().endsWith(".so"));
+	}
+	else {
+		return moduleEntry.getPath().toString().endsWith(extensionsOverride);
+	}
   }
 
   private CodeTransparencyFactory() {}
