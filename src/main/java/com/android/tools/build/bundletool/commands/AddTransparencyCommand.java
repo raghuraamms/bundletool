@@ -32,7 +32,6 @@ import com.android.tools.build.bundletool.model.exceptions.CommandExecutionExcep
 import com.android.tools.build.bundletool.model.exceptions.InvalidBundleException;
 import com.android.tools.build.bundletool.model.exceptions.InvalidCommandException;
 import com.android.tools.build.bundletool.model.utils.files.FilePreconditions;
-import com.android.tools.build.bundletool.model.ModuleEntry.ModuleEntryBundleLocation;
 import com.android.tools.build.bundletool.transparency.BundleTransparencyCheckUtils;
 import com.android.tools.build.bundletool.transparency.CodeTransparencyFactory;
 import com.google.auto.value.AutoValue;
@@ -414,7 +413,7 @@ public abstract class AddTransparencyCommand {
 	        .setRawEntries(module.getEntries().stream()
 			.map(entry -> entry.getPath().equals(BundleModule.ASSETS_DIRECTORY.resolve(BundleMetadata.TRANSPARENCY_EXTRA_FILE_NAME))? ModuleEntry.builder()
 			    .setContent(toBytes(content))
-			    .setBundleLocation(entry.getBundleLocation())
+			    .setFileLocation(entry.getFileLocation())
                 .setPath(entry.getPath())
                 .setForceUncompressed(false)
             .build() : entry).collect(toImmutableList()))

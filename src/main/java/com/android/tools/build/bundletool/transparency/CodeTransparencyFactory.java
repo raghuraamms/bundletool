@@ -48,7 +48,7 @@ public final class CodeTransparencyFactory {
     ImmutableList<CodeRelatedFile> codeRelatedFiles =
         bundle.getFeatureModules().values().stream()
             .flatMap(bundleModule -> getCodeRelatedFileEntries(bundleModule, extensionsOverride))
-            .map(CodeTransparencyFactory::createCodeRelatedFile)
+            .map(moduleEntry -> createCodeRelatedFile(moduleEntry, extensionsOverride))
             .sorted(Comparator.comparing(CodeRelatedFile::getPath))
             .collect(toImmutableList());
 
@@ -112,7 +112,7 @@ public final class CodeTransparencyFactory {
     checkArgument(moduleEntry.getFileLocation().isPresent());
     CodeRelatedFile.Builder codeRelatedFile =
         CodeRelatedFile.newBuilder()
-            .setPath(moduleEntry.getBundleLocation().get().entryPathInFile().toString());
+            .setPath(moduleEntry.getFileLocation().get().entryPathInFile().toString());
     if (extensionsOverride != null) {
         codeRelatedFile.setType(CodeRelatedFile.Type.NATIVE_LIBRARY);
     }
